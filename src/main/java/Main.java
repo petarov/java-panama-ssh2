@@ -28,6 +28,7 @@ public class Main {
     private static final String RT_EXEC = "exec";
     private static final String TERMINAL_TYPE = "ansi";
     private static final String CHANNEL_TYPE = "session";
+    private static final int BUFSIZE = libssh2_h.LIBSSH2_CHANNEL_PACKET_DEFAULT + 1;
 
     private static String hostname, username;
     private static int port, connType;
@@ -103,50 +104,31 @@ public class Main {
                 // disable blocking mode
                 libssh2_h.libssh2_session_set_blocking(ptrSession, 0);
 
-                final int BUFSIZE = 32000;
-                long read = -1, write = -1, active = 0;
-//                boolean quit = false;
+                Thread t = new Thread(() -> {
+                    while (!g_quit) {
+                        String cmd = System.console().readLine();
+                        if (cmd.equals("quit") || cmd.equals("logout") || cmd.equals("exit")) {
+                            g_quit = true;
+                        } else {
+                            cmd += "\n";
 
-                Thread t = new Thread(new Runnable() {
-                    @Override
-                    public void run() {
-                        long write = -1;
-                        boolean quit = false;
+                            long written;
+                            while (libssh2_h.LIBSSH2_ERROR_EAGAIN == (written = libssh2_h.libssh2_channel_write_ex(
+                                    ptrChannel, 0, scope.allocateCString(cmd), cmd.length()))) {
+                                if (written != libssh2_h.LIBSSH2_ERROR_EAGAIN && written < 0) {
+                                    throw new RuntimeException("Error writing to ssh channel!");
 
-                        while (!quit) {
-                            // WRITE
-                            Console console = System.console();
-                            String cmd = console.readLine("Enter cmd: ");
-                            if (cmd.equals("quit") || cmd.equals("logout") || cmd.equals("exit")) {
-                                quit = true;
-                                g_quit = true;
-                            } else {
-                                System.out.println("SENDING");
-                                cmd += "\n";
-//                                nio(() -> libssh2_h.libssh2_channel_process_startup(ptrChannel,
-//                                        scope.allocateCString(RT_EXEC), RT_EXEC.length(), scope.allocateCString(cmd), cmd.length()), "Unable to send exec command!");
-
-                                //                        nio(() -> (int) libssh2_h.libssh2_channel_write_ex(ptrChannel, 0, scope.allocateCString(cmd), cmd.length()), "Unable to send exec command!");
-                                while (libssh2_h.LIBSSH2_ERROR_EAGAIN == (write = libssh2_h.libssh2_channel_write_ex(ptrChannel, 0, scope.allocateCString(cmd), cmd.length()))) {
-                                    if (write != libssh2_h.LIBSSH2_ERROR_EAGAIN && write < 0) {
-                                        throw new RuntimeException("Error writing to ssh channel!");
-
-                                    }
                                 }
-//                                nio(() -> libssh2_h.libssh2_channel_send_eof(ptrChannel), "Error writing eof to channel!");
                             }
+//                            nio(() -> libssh2_h.libssh2_channel_send_eof(ptrChannel), "Error writing eof to channel!");
                         }
                     }
                 });
                 t.start();
 
-                while (!g_quit) {
-                    // READ
-//                    while (0 == (rc = libssh2_h.libssh2_channel_eof(ptrChannel))) {
-//                    if (rc < 0) {
-//                        throw new RuntimeException("Failed reading remote EOF from ssh channel!");
-//                    }
+                long read;
 
+                while (!g_quit) {
                     Pointer<Byte> buffer = scope.allocate(NativeTypes.CHAR, BUFSIZE);
                     do {
                         read = libssh2_h.libssh2_channel_read_ex(ptrChannel, 0, buffer, BUFSIZE);
@@ -156,14 +138,13 @@ public class Main {
                     } while (libssh2_h.LIBSSH2_ERROR_EAGAIN == read && !g_quit);
 
                     if (read > 0) {
-                        System.out.println(Pointer.toString(buffer));
+                        System.out.println(Pointer.toString(buffer).substring(0, (int) read));
                     }
 
                     if (libssh2_h.libssh2_channel_eof(ptrChannel) == 1) {
                         break;
                     }
                 }
-                System.out.println("ENDED!");
 
                 t.join();
 
@@ -212,7 +193,7 @@ public class Main {
         int rc;
         while (libssh2_h.LIBSSH2_ERROR_EAGAIN == (rc = supplier.get())) {
             if (rc != libssh2_h.LIBSSH2_ERROR_EAGAIN && rc != 0) {
-                throw new RuntimeException(errorMsg + " ERR: " + rc);
+                throw new RuntimeException(errorMsg + " RC=" + rc);
             }
         }
     }
