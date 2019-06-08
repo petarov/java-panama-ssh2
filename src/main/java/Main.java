@@ -1,8 +1,8 @@
 import ssh2.libssh2;
 import ssh2.libssh2_h;
 
-import java.awt.*;
-import java.foreign.*;
+import java.foreign.NativeTypes;
+import java.foreign.Scope;
 import java.foreign.memory.Callback;
 import java.foreign.memory.Pointer;
 import java.io.Console;
@@ -12,7 +12,6 @@ import java.io.IOException;
 import java.lang.reflect.Field;
 import java.net.Socket;
 import java.nio.charset.StandardCharsets;
-import java.util.Map;
 import java.util.function.Supplier;
 
 import static java.foreign.memory.Pointer.ofNull;
@@ -54,7 +53,7 @@ public class Main {
                         Callback.ofNull(), ofNull());
                 final int fd = (int) connectFd(hostname, port);
 
-                nio(() -> libssh2_h.libssh2_session_handshake(ptrSession, fd), "SSH handshake failed!");
+                bio(() -> libssh2_h.libssh2_session_handshake(ptrSession, fd), "SSH handshake failed!");
 
                 String fingerprint = Pointer.toString(libssh2_h.libssh2_hostkey_hash(ptrSession,
                         libssh2_h.LIBSSH2_HOSTKEY_HASH_SHA1));
@@ -69,13 +68,12 @@ public class Main {
                     Console console = System.console();
                     StringBuilder sb = new StringBuilder();
                     sb.append(console.readPassword("%s's password: ", hostname));
-                    nio(() -> libssh2_h.libssh2_userauth_password_ex(ptrSession,
+                    bio(() -> libssh2_h.libssh2_userauth_password_ex(ptrSession,
                             scope.allocateCString(username), username.length(),
                             scope.allocateCString(sb.toString()), sb.length(), Callback.ofNull()), "Authentication by password failed!");
                     System.out.println("Authentication by password successful.");
                 } else if (auth.contains("publickey") && connType == 2) {
-                    // TODO configurable pbk paths?
-                    nio(() -> libssh2_h.libssh2_userauth_publickey_fromfile_ex(ptrSession,
+                    bio(() -> libssh2_h.libssh2_userauth_publickey_fromfile_ex(ptrSession,
                             scope.allocateCString(username), username.length(),
                             scope.allocateCString("~/.ssh/id_rsa.pub"), scope.allocateCString("~/.ssh/id_rsa"),
                             scope.allocateCString("")), "Authentication by public key failed!");
@@ -93,12 +91,12 @@ public class Main {
                     throw new RuntimeException("Could not open a session!");
                 }
 
-                nio(() -> libssh2_h.libssh2_channel_request_pty_ex(ptrChannel, scope.allocateCString(TERMINAL_TYPE),
+                bio(() -> libssh2_h.libssh2_channel_request_pty_ex(ptrChannel, scope.allocateCString(TERMINAL_TYPE),
                         TERMINAL_TYPE.length(), Pointer.ofNull(), 0,
                         libssh2_h.LIBSSH2_TERM_WIDTH, libssh2_h.LIBSSH2_TERM_HEIGHT,
                         libssh2_h.LIBSSH2_TERM_WIDTH_PX, libssh2_h.LIBSSH2_TERM_HEIGHT_PX), "Failed requesting pty!");
 
-                nio(() -> libssh2_h.libssh2_channel_process_startup(ptrChannel,
+                bio(() -> libssh2_h.libssh2_channel_process_startup(ptrChannel,
                         scope.allocateCString(RT_SHELL), RT_SHELL.length(), ofNull(), 0), "Unable to request shell on pty!");
 
                 // disable blocking mode
@@ -120,7 +118,7 @@ public class Main {
 
                                 }
                             }
-//                            nio(() -> libssh2_h.libssh2_channel_send_eof(ptrChannel), "Error writing eof to channel!");
+//                            bio(() -> libssh2_h.libssh2_channel_send_eof(ptrChannel), "Error writing eof to channel!");
                         }
                     }
                 });
@@ -189,12 +187,11 @@ public class Main {
 
     // --- UTILS
 
-    private static void nio(Supplier<Integer> supplier, String errorMsg) {
+    private static void bio(Supplier<Integer> supplier, String errorMsg) {
         int rc;
-        while (libssh2_h.LIBSSH2_ERROR_EAGAIN == (rc = supplier.get())) {
-            if (rc != libssh2_h.LIBSSH2_ERROR_EAGAIN && rc != 0) {
-                throw new RuntimeException(errorMsg + " RC=" + rc);
-            }
+        while (libssh2_h.LIBSSH2_ERROR_EAGAIN == (rc = supplier.get())) ;
+        if (rc != 0) {
+            throw new RuntimeException(errorMsg + " (RC=" + rc + ")");
         }
     }
 
