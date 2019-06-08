@@ -25,10 +25,13 @@ import static java.foreign.memory.Pointer.ofNull;
 public class Main {
 
     private static final String RT_SHELL = "shell";
+    private static final String RT_EXEC = "exec";
     private static final String TERMINAL_TYPE = "ansi";
+    private static final String CHANNEL_TYPE = "session";
 
     private static String hostname, username;
     private static int port, connType;
+    private static boolean g_quit = false;
 
     private static Pointer<libssh2._LIBSSH2_SESSION> ptrSession = Pointer.ofNull();
     private static Pointer<libssh2._LIBSSH2_CHANNEL> ptrChannel = Pointer.ofNull();
@@ -41,7 +44,6 @@ public class Main {
             System.err.println(String.format("Could not init libssh2: %d", rc));
             return;
         }
-
 
         try (Scope scope = Scope.globalScope().fork()) {
             try {
@@ -66,31 +68,23 @@ public class Main {
                     Console console = System.console();
                     StringBuilder sb = new StringBuilder();
                     sb.append(console.readPassword("%s's password: ", hostname));
-
-                    if (libssh2_h.libssh2_userauth_password_ex(ptrSession,
+                    nio(() -> libssh2_h.libssh2_userauth_password_ex(ptrSession,
                             scope.allocateCString(username), username.length(),
-                            scope.allocateCString(sb.toString()), sb.length(), Callback.ofNull()) != 0) {
-                        throw new RuntimeException("Authentication by password failed!");
-                    } else {
-                        System.out.println("Authentication by password successful.");
-                    }
+                            scope.allocateCString(sb.toString()), sb.length(), Callback.ofNull()), "Authentication by password failed!");
+                    System.out.println("Authentication by password successful.");
                 } else if (auth.contains("publickey") && connType == 2) {
                     // TODO configurable pbk paths?
-                    if (libssh2_h.libssh2_userauth_publickey_fromfile_ex(ptrSession,
+                    nio(() -> libssh2_h.libssh2_userauth_publickey_fromfile_ex(ptrSession,
                             scope.allocateCString(username), username.length(),
                             scope.allocateCString("~/.ssh/id_rsa.pub"), scope.allocateCString("~/.ssh/id_rsa"),
-                            scope.allocateCString("")) != 0) {
-                        throw new RuntimeException("Authentication by public key failed!");
-                    } else {
-                        System.out.println("Authentication by public key successful.");
-                    }
+                            scope.allocateCString("")), "Authentication by public key failed!");
+                    System.out.println("Authentication by public key successful.");
                 } else {
                     throw new RuntimeException("No known authentication type supported!");
                 }
 
-                final String channelType = "session";
                 ptrChannel = libssh2_h.libssh2_channel_open_ex(ptrSession,
-                        scope.allocateCString(channelType), channelType.length(),
+                        scope.allocateCString(CHANNEL_TYPE), CHANNEL_TYPE.length(),
                         libssh2_h.LIBSSH2_CHANNEL_WINDOW_DEFAULT,
                         libssh2_h.LIBSSH2_CHANNEL_PACKET_DEFAULT,
                         ofNull(), 0);
@@ -107,101 +101,71 @@ public class Main {
                         scope.allocateCString(RT_SHELL), RT_SHELL.length(), ofNull(), 0), "Unable to request shell on pty!");
 
                 // disable blocking mode
-                libssh2_h.libssh2_channel_set_blocking(ptrChannel, 0);
                 libssh2_h.libssh2_session_set_blocking(ptrSession, 0);
 
                 final int BUFSIZE = 32000;
                 long read = -1, write = -1, active = 0;
-                boolean quit = false;
+//                boolean quit = false;
 
-                libssh2._LIBSSH2_POLLFD fds = scope.allocateStruct(libssh2._LIBSSH2_POLLFD.class);
-                fds.type$set((byte) libssh2_h.LIBSSH2_POLLFD_CHANNEL);
-                fds.fd$get().channel$set(ptrChannel);
-                fds.events$set(libssh2_h.LIBSSH2_POLLFD_POLLIN | libssh2_h.LIBSSH2_POLLFD_POLLOUT);
+                Thread t = new Thread(new Runnable() {
+                    @Override
+                    public void run() {
+                        long write = -1;
+                        boolean quit = false;
 
-                while (!quit) {
-                    rc = libssh2_h.libssh2_poll(fds.ptr(), 1, 10);
-                    if (rc < 1) {
-                        continue;
-                    }
+                        while (!quit) {
+                            // WRITE
+                            Console console = System.console();
+                            String cmd = console.readLine("Enter cmd: ");
+                            if (cmd.equals("quit") || cmd.equals("logout") || cmd.equals("exit")) {
+                                quit = true;
+                                g_quit = true;
+                            } else {
+                                System.out.println("SENDING");
+                                cmd += "\n";
+//                                nio(() -> libssh2_h.libssh2_channel_process_startup(ptrChannel,
+//                                        scope.allocateCString(RT_EXEC), RT_EXEC.length(), scope.allocateCString(cmd), cmd.length()), "Unable to send exec command!");
 
-                    active = 0;
+                                //                        nio(() -> (int) libssh2_h.libssh2_channel_write_ex(ptrChannel, 0, scope.allocateCString(cmd), cmd.length()), "Unable to send exec command!");
+                                while (libssh2_h.LIBSSH2_ERROR_EAGAIN == (write = libssh2_h.libssh2_channel_write_ex(ptrChannel, 0, scope.allocateCString(cmd), cmd.length()))) {
+                                    if (write != libssh2_h.LIBSSH2_ERROR_EAGAIN && write < 0) {
+                                        throw new RuntimeException("Error writing to ssh channel!");
 
-                    System.out.println("FLAGS: " + fds.revents$get());
-
-                    // can read
-                    if ((fds.revents$get() & libssh2_h.LIBSSH2_POLLFD_POLLIN) == libssh2_h.LIBSSH2_POLLFD_POLLIN) {
-                        active++;
-
-                        Pointer<Byte> buffer = scope.allocate(NativeTypes.INT8, BUFSIZE);
-                        read = libssh2_h.libssh2_channel_read_ex(ptrChannel, 0, buffer, BUFSIZE);
-                        if (read != libssh2_h.LIBSSH2_ERROR_EAGAIN && read < 0) {
-                            throw new RuntimeException("Error reading from ssh channel!");
+                                    }
+                                }
+//                                nio(() -> libssh2_h.libssh2_channel_send_eof(ptrChannel), "Error writing eof to channel!");
+                            }
                         }
+                    }
+                });
+                t.start();
 
+                while (!g_quit) {
+                    // READ
+//                    while (0 == (rc = libssh2_h.libssh2_channel_eof(ptrChannel))) {
+//                    if (rc < 0) {
+//                        throw new RuntimeException("Failed reading remote EOF from ssh channel!");
+//                    }
+
+                    Pointer<Byte> buffer = scope.allocate(NativeTypes.CHAR, BUFSIZE);
+                    do {
+                        read = libssh2_h.libssh2_channel_read_ex(ptrChannel, 0, buffer, BUFSIZE);
+                        if (read < 0 && read != libssh2_h.LIBSSH2_ERROR_EAGAIN) {
+                            break;
+                        }
+                    } while (libssh2_h.LIBSSH2_ERROR_EAGAIN == read && !g_quit);
+
+                    if (read > 0) {
                         System.out.println(Pointer.toString(buffer));
                     }
 
-                    // can write
-                    if ((fds.revents$get() & libssh2_h.LIBSSH2_POLLFD_POLLOUT) == libssh2_h.LIBSSH2_POLLFD_POLLOUT && active == 0) {
-                        active++;
-
-                        Console console = System.console();
-                        String cmd = console.readLine("Enter cmd: ");
-                        if (cmd.equals("quit") || cmd.equals("logout") || cmd.equals("exit")) {
-                            quit = true;
-                        } else {
-                            final String requestTypeExec = "exec";
-                            nio(() -> libssh2_h.libssh2_channel_process_startup(ptrChannel,
-                                    scope.allocateCString(requestTypeExec), requestTypeExec.length(), scope.allocateCString(cmd), cmd.length()), "Error executing ssh command!");
-//                            while (libssh2_h.LIBSSH2_ERROR_EAGAIN == (write = libssh2_h.libssh2_channel_write_ex(ptrChannel, 0, ptrCmd, cmd.length()))) {
-//                                if (write != libssh2_h.LIBSSH2_ERROR_EAGAIN && write < 0) {
-//                                    throw new RuntimeException("Error writing to ssh channel!");
-//                                }
-//                            }
-                            nio(() -> libssh2_h.libssh2_channel_send_eof(ptrChannel), "Error writing eof to ssh channel!");
-                        }
-                    }
-
-                    if ((fds.revents$get() & libssh2_h.LIBSSH2_POLLFD_CHANNEL_CLOSED) == libssh2_h.LIBSSH2_POLLFD_CHANNEL_CLOSED) {
-                        if (active == 0) {
-                            quit = true;
-                        }
+                    if (libssh2_h.libssh2_channel_eof(ptrChannel) == 1) {
+                        break;
                     }
                 }
+                System.out.println("ENDED!");
 
-//                while (!quit) {
-//                    // READ
-//                    while (0 == (rc = libssh2_h.libssh2_channel_eof(ptrChannel))) {
-//                        if (rc < 0) {
-//                            throw new RuntimeException("Failed reading remote EOF from ssh channel!");
-//                        }
-//
-//                        Pointer<Byte> buffer = scope.allocate(NativeTypes.INT8, BUFSIZE);
-////                        while (libssh2_h.LIBSSH2_ERROR_EAGAIN == (read = libssh2_h.libssh2_channel_read_ex(ptrChannel, 0, buffer, BUFSIZE))) {
-//                        read = libssh2_h.libssh2_channel_read_ex(ptrChannel, 0, buffer, BUFSIZE);
-//                        if (read != libssh2_h.LIBSSH2_ERROR_EAGAIN && read < 0) {
-//                            throw new RuntimeException("Error reading from ssh channel!");
-//                        }
-////                        }
-//                        System.out.println(Pointer.toString(buffer));
-//                    }
-//
-//                    // WRITE
-//                    Console console = System.console();
-//                    String cmd = console.readLine("Enter cmd: ");
-//                    if (cmd.equals("quit") || cmd.equals("logout") || cmd.equals("exit")) {
-//                        quit = true;
-//                    } else {
-//                        final Pointer<Byte> ptrCmd = scope.allocateCString(cmd);
-//                        while (libssh2_h.LIBSSH2_ERROR_EAGAIN == (write = libssh2_h.libssh2_channel_write_ex(ptrChannel, 0, ptrCmd, cmd.length()))) {
-//                            if (write != libssh2_h.LIBSSH2_ERROR_EAGAIN && write < 0) {
-//                                throw new RuntimeException("Error writing to ssh channel!");
-//                            }
-//                        }
-//                        libssh2_h.libssh2_channel_send_eof(ptrChannel);
-//                    }
-//                }
+                t.join();
 
                 System.out.println("Good bye!");
             } finally {
@@ -280,7 +244,8 @@ public class Main {
         return -1;
     }
 
-    private static long getFileDescriptorField(FileDescriptor fd, String fieldName, boolean isInt) throws NoSuchFieldException, IllegalAccessException {
+    private static long getFileDescriptorField(FileDescriptor fd, String fieldName, boolean isInt) throws
+            NoSuchFieldException, IllegalAccessException {
         Field field = FileDescriptor.class.getDeclaredField(fieldName);
         field.setAccessible(true);
         long value = isInt ? field.getInt(fd) : field.getLong(fd);

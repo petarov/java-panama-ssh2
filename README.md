@@ -8,6 +8,10 @@ NOTE: This is an experimental project. Stability is not guaranteed.
 
 ## Requirements
 
+Make sure `libssh2` is installed. 
+
+    brew install libssh2
+
 Get the latest Panama [JDK build](http://jdk.java.net/panama/). 
  
 Configure the `JAVA_HOME` var to point to the downloaded JDK in your console.
