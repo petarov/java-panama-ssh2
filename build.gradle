@@ -9,3 +9,6 @@ repositories {
 dependencies {
     implementation fileTree(dir: 'lib', include: ['*.jar'])
 }
+
+//compileJava.options.fork = true
+//compileJava.options.forkOptions.executable = '/../Java/latest13/bin/javac'

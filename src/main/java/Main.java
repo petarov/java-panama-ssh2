@@ -24,6 +24,9 @@ import static java.foreign.memory.Pointer.ofNull;
  */
 public class Main {
 
+    private static final String RT_SHELL = "shell";
+    private static final String TERMINAL_TYPE = "ansi";
+
     private static String hostname, username;
     private static int port, connType;
 
@@ -47,9 +50,6 @@ public class Main {
                 ptrSession = libssh2_h.libssh2_session_init_ex(Callback.ofNull(), Callback.ofNull(),
                         Callback.ofNull(), ofNull());
                 final int fd = (int) connectFd(hostname, port);
-
-                // set session as non-blocking
-                libssh2_h.libssh2_session_set_blocking(ptrSession, 1);
 
                 nio(() -> libssh2_h.libssh2_session_handshake(ptrSession, fd), "SSH handshake failed!");
 
@@ -98,19 +98,13 @@ public class Main {
                     throw new RuntimeException("Could not open a session!");
                 }
 
-                final String terminalType = "ansi";
-                if (libssh2_h.libssh2_channel_request_pty_ex(ptrChannel, scope.allocateCString(terminalType),
-                        terminalType.length(), Pointer.ofNull(), 0,
+                nio(() -> libssh2_h.libssh2_channel_request_pty_ex(ptrChannel, scope.allocateCString(TERMINAL_TYPE),
+                        TERMINAL_TYPE.length(), Pointer.ofNull(), 0,
                         libssh2_h.LIBSSH2_TERM_WIDTH, libssh2_h.LIBSSH2_TERM_HEIGHT,
-                        libssh2_h.LIBSSH2_TERM_WIDTH_PX, libssh2_h.LIBSSH2_TERM_HEIGHT_PX) != 0) {
-                    throw new RuntimeException("Failed requesting pty!");
-                }
+                        libssh2_h.LIBSSH2_TERM_WIDTH_PX, libssh2_h.LIBSSH2_TERM_HEIGHT_PX), "Failed requesting pty!");
 
-                final String requestType = "shell";
-                if (libssh2_h.libssh2_channel_process_startup(ptrChannel,
-                        scope.allocateCString(requestType), requestType.length(), ofNull(), 0) != 0) {
-                    throw new RuntimeException("Unable to request shell on pty!");
-                }
+                nio(() -> libssh2_h.libssh2_channel_process_startup(ptrChannel,
+                        scope.allocateCString(RT_SHELL), RT_SHELL.length(), ofNull(), 0), "Unable to request shell on pty!");
 
                 // disable blocking mode
                 libssh2_h.libssh2_channel_set_blocking(ptrChannel, 0);
@@ -249,7 +243,6 @@ public class Main {
     }
 
     // --- UTILS
-
 
     private static void nio(Supplier<Integer> supplier, String errorMsg) {
         int rc;
