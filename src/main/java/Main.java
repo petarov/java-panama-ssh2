@@ -6,6 +6,7 @@ import java.foreign.Scope;
 import java.foreign.memory.Callback;
 import java.foreign.memory.Pointer;
 import java.io.Console;
+import java.io.File;
 import java.io.FileDescriptor;
 import java.io.FileInputStream;
 import java.io.IOException;
@@ -29,7 +30,7 @@ public class Main {
     private static final String CHANNEL_TYPE = "session";
     private static final int BUFSIZE = libssh2_h.LIBSSH2_CHANNEL_PACKET_DEFAULT + 1;
 
-    private static String hostname, username;
+    private static String hostname, username, keysPath;
     private static int port, connType;
     private static boolean g_quit = false;
 
@@ -73,9 +74,10 @@ public class Main {
                             scope.allocateCString(sb.toString()), sb.length(), Callback.ofNull()), "Authentication by password failed!");
                     System.out.println("Authentication by password successful.");
                 } else if (auth.contains("publickey") && connType == 2) {
+                    System.out.println("Using SSH keys from " + keysPath);
                     bio(() -> libssh2_h.libssh2_userauth_publickey_fromfile_ex(ptrSession,
                             scope.allocateCString(username), username.length(),
-                            scope.allocateCString("~/.ssh/id_rsa.pub"), scope.allocateCString("~/.ssh/id_rsa"),
+                            scope.allocateCString(keysPath + "id_rsa.pub"), scope.allocateCString(keysPath + "id_rsa"),
                             scope.allocateCString("")), "Authentication by public key failed!");
                     System.out.println("Authentication by public key successful.");
                 } else {
@@ -175,6 +177,9 @@ public class Main {
                 break;
             case "-k":
                 connType = 2;
+                if (args.length < 5) {
+                    throw new RuntimeException("Please specify the path to your id_rsa and id_rsa.pub keys as last parameter.");
+                }
                 break;
             default:
                 throw new RuntimeException("Invalid authentication type!");
@@ -183,6 +188,12 @@ public class Main {
         hostname = args[1];
         port = Integer.parseInt(args[2]);
         username = args[3];
+        if (connType == 2) {
+            keysPath = args[4];
+            if (!keysPath.endsWith(File.separator)) {
+                keysPath += File.separator;
+            }
+        }
     }
 
     // --- UTILS
