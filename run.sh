@@ -9,5 +9,14 @@ if [ ! -f $JAVA_HOME/bin/jextract ]; then
   exit 1
 fi
 
-$JAVA_HOME/bin/javac -cp lib/ssh2.jar src/main/java/Main.java 
-$JAVA_HOME/bin/java -Djava.library.path=/usr/local/lib -cp lib/ssh2.jar:./src/main/java/ Main $@
+if [[ $OSTYPE =~ "darwin" ]]; then
+  LIB_PATH=/usr/local/lib
+elif [[ $OSTYPE =~ "linux" ]]; then
+  LIB_PATH=/usr/lib64
+else
+  echo Unsupported os type - $OS_TYPE
+  exit 1
+fi
+
+$JAVA_HOME/bin/javac -cp lib/ssh2.jar src/main/java/Main.java
+$JAVA_HOME/bin/java -Djava.library.path=$LIB_PATH -cp lib/ssh2.jar:./src/main/java/ Main $@
