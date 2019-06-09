@@ -46,7 +46,7 @@ public class Main {
             return;
         }
 
-        try (Scope scope = Scope.globalScope().fork()) {
+        try (Scope scope = libssh2_h.scope().fork()) {
             try {
                 System.out.println(String.format("Connecting to %s:%d...", hostname, port));
 
